@@ -1,2 +1,5 @@
 .vscode/
 output/
+tests/output/
+debug.log
+node_modules/
