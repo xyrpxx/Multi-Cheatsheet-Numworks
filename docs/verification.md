@@ -9,7 +9,7 @@
 - Vrai lecteur C avec EADK scripté : maintien de touche, extrémités, zoom/déplacement retrouvés après retour, limites d’affichage : PASS.
 - Chromium/Playwright : outils, historiques indépendants, réorganisation, export, rechargement IndexedDB, migration, migration échouée conservant l’ancien brouillon, échec de sauvegarde visible, page vide et URL de projet : PASS.
 - Simulateur officiel Epsilon : captures du fichier legacy, des pages 1 et 3 de la fixture, et des deux pages exportées par le navigateur : réussies et inspectées.
-- GitHub Pages : source GitHub Actions configurée sur la fork. Workflow de publication préparé; résultat de déploiement à consigner après exécution.
+- GitHub Pages : tests et déploiement réussis via [Actions 37793185924](https://github.com/xyrpxx/Multi-Cheatsheet-Numworks/actions/runs/37793185924). Site, JS, CSS et NWA accessibles sous le chemin du projet; SHA-256 distant du NWA identique à celui livré. Chromium relancé avec succès après correction du statut initial sans brouillon.
 
 Les contrôles hôte de touches exécutent le véritable `main.c` avec une EADK simulée. Les captures officielles emploient une entrée directe de test réservée au simulateur. Aucun appareil physique n’est testé.
 

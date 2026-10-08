@@ -656,7 +656,7 @@ class Editor {
       let state = await GalleryStorage.load(), legacy = false;
       if (!state) {
         const old = JSON.parse(localStorage.getItem(KEY) || 'null');
-        if (!old) return;
+        if (!old) { this.saveStatus.textContent = 'No saved gallery yet'; return; }
         state = {...old, version: 3, pages: [{items: old.items || [], selId: null, undoStack: [], redoStack: []}], pageIndex: 0}; legacy = true;
       }
       if (state.version !== 3 || !Array.isArray(state.pages) || !state.pages.length || state.pages.length > GalleryFormat.MAX_PAGES) throw new Error('Invalid saved gallery');

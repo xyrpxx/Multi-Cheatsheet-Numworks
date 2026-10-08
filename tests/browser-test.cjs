@@ -22,6 +22,7 @@ const server = http.createServer((req, res) => {
     const page = await context.newPage(), errors = [];
     page.on('pageerror', e => errors.push(e.message));
     await page.goto(url); await page.evaluate(() => editor.ready);
+    assert.equal(await page.locator('#saveStatus').innerText(), 'No saved gallery yet');
     const image = await page.evaluate(() => {
       const c = document.createElement('canvas'); c.width = c.height = 128;
       const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, 128, 128);
