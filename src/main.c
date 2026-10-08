@@ -9,7 +9,10 @@
 const char eadk_app_name[] __attribute__((section(".rodata.eadk_app_name"))) = "Periodic";
 const uint32_t eadk_api_level  __attribute__((section(".rodata.eadk_api_level"))) = 0;
 
+#ifndef SIMULATOR
 #define SIMULATOR 0
+#endif
+#include "gallery.h"
 
 const eadk_keyboard_state_t default_shortcut = (1ULL << eadk_key_ok) | (1ULL << eadk_key_back) | (1ULL << eadk_key_zero);
 
@@ -276,14 +279,39 @@ int main(void) {
     saved_shortcut = default_shortcut;
     #endif
 
+#if SIMULATOR
+    const char *capture = getenv("MCS_CAPTURE_PAGE");
+    if (!capture) periodic();
+#else
     periodic();
+#endif
 
     eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_white);
     
-    const char* data = eadk_external_data;
-    uint32_t data_size = (uint32_t)eadk_external_data_size;
+    Gallery gallery;
+    if (!gallery_init(&gallery, eadk_external_data, eadk_external_data_size)) {
+        eadk_display_draw_string("Invalid image file - Home to exit", (eadk_point_t){0, 0}, false, eadk_color_red, eadk_color_white);
+        while (!eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_home)) eadk_timing_msleep(20);
+        return 0;
+    }
+    typedef struct { int x, y; double scale; } ViewState;
+    static ViewState views[GALLERY_MAX_PAGES];
+    memset(views, 0, sizeof(views));
+    unsigned page_index = 0;
+#if SIMULATOR
+    if (capture) {
+        int index = atoi(capture);
+        if (index >= 0 && (unsigned)index < gallery.count) page_index = (unsigned)index;
+    }
+#endif
+    eadk_keyboard_state_t page_keys = 0;
+open_page: ;
+    GalleryPage page;
+    if (!gallery_page(&gallery, page_index, &page)) return 0;
+    const char* data = page.data;
+    uint32_t data_size = page.size;
 
-    uint32_t total_pixels = 0;
+    uint64_t total_pixels = 0;
     for (uint32_t i = 0; i < data_size; ++i) {
         uint8_t b = (uint8_t)data[i];
         total_pixels += ((b >> 4) & 0x0F) + 1;
@@ -333,10 +361,11 @@ int main(void) {
         scan_hint_valid = 0;
     }
     row_cache_init();
+    scan_hint_valid = 0;
 
-    uint32_t cols = 0;
+    uint32_t cols = page.width / 320;
     double sqv = (double)line_count / 240.0;
-    if (sqv > 0.0) {
+    if (!cols && sqv > 0.0) {
         uint32_t sc = (uint32_t)(sqrt(sqv) + 0.5);
         if (sc >= 1 && sc <= 12 && (uint32_t)sc * (uint32_t)sc * 240U == line_count) {
             cols = sc;
@@ -399,14 +428,14 @@ int main(void) {
         }
     }
 
-    int view_x = 0, view_y = 0;
+    int view_x = views[page_index].x, view_y = views[page_index].y;
 
     double max_scale = (double)total_w / 320.0;
     double max_scale_y = (double)total_h / 240.0;
     if (max_scale_y < max_scale) max_scale = max_scale_y;
     if (max_scale < 1.0) max_scale = 1.0; 
     
-    double scale = 4.0;
+    double scale = views[page_index].scale ? views[page_index].scale : (max_scale < 4.0 ? max_scale : 4.0);
 
     buffer_line_count = 0;
     cached_source_y = -1;
@@ -436,6 +465,18 @@ int main(void) {
     }
     flush_line_buffer();
 
+    char page_label[24];
+    uint64_t indicator_until = eadk_timing_millis() + 800;
+    if (gallery.count > 1) {
+        snprintf(page_label, sizeof(page_label), "Page %u/%u", page_index + 1, gallery.count);
+        eadk_display_draw_string(page_label, (eadk_point_t){2, 2}, false, eadk_color_black, eadk_color_white);
+    }
+#if SIMULATOR
+    if (capture) {
+        /* NWS replay captures after the last event through the official event API. */
+        while (1) { int32_t timeout = 0; eadk_event_get(&timeout); }
+    }
+#endif
     int pan_step = 16;
 
     while (1) {
@@ -468,12 +509,26 @@ int main(void) {
             for (int i = 0; i < 500 && eadk_keyboard_key_down(eadk_keyboard_scan(), eadk_key_shift); ++i) {
                 eadk_timing_msleep(10);
                 if (i == 100) {
-                    if (settings()) return 0;
+                    if (settings()) { free(samples); free(col_offsets_heap_buf); return 0; }
                 }
             }
         }
 
+        const eadk_keyboard_state_t page_mask = (1ULL << eadk_key_toolbox) | (1ULL << eadk_key_backspace);
+        eadk_keyboard_state_t fresh = st & page_mask & ~page_keys;
+        page_keys = st & page_mask;
+        int direction = fresh == (1ULL << eadk_key_toolbox) ? -1 : fresh == (1ULL << eadk_key_backspace) ? 1 : 0;
+        if ((direction < 0 && page_index > 0) || (direction > 0 && page_index + 1 < gallery.count)) {
+            views[page_index] = (ViewState){view_x, view_y, scale};
+            free(samples);
+            if (col_offsets_heap_buf) free(col_offsets_heap_buf);
+            page_index = (unsigned)((int)page_index + direction);
+            goto open_page;
+        }
         int moved = 0;
+        if (indicator_until && eadk_timing_millis() >= indicator_until) {
+            indicator_until = 0; moved = 1;
+        }
         if (eadk_keyboard_key_down(st, eadk_key_right)) { view_x += pan_step * scale; moved = 1; }
         if (eadk_keyboard_key_down(st, eadk_key_left))  { view_x -= pan_step * scale; moved = 1; }
         if (eadk_keyboard_key_down(st, eadk_key_down))  { view_y += pan_step * scale; moved = 1; }

@@ -142,8 +142,10 @@ int settings() {
             saved_shortcut = state;
             char data_buf[sizeof(eadk_keyboard_state_t)];
             memcpy(data_buf, &saved_shortcut, sizeof(saved_shortcut));
+#if !SIMULATOR
             extapp_fileErase(SAVE_FILE);
             extapp_fileWrite(SAVE_FILE, data_buf, sizeof(eadk_keyboard_state_t));
+#endif
             eadk_display_push_rect_uniform(eadk_screen_rect, eadk_color_green);
             return 1;
         }

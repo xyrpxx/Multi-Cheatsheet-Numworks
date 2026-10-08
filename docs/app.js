@@ -1,6 +1,6 @@
 (() => {
 const BW = 1280, BH = 960, MAXSRC = 2000, KEY = 'Cheatsheet:session:v2';
-const IDS = ['fileInput','orig','overlay','preview','lens','cropCanvas','rotateCanvas','cropModal','rotateModal','openBtn','undoBtn','redoBtn','rotateBtn','rotateCustomBtn','flipHBtn','flipVBtn','cropBtn','frontBtn','backBtn','deleteBtn','downloadBtn','downloadPreviewBtn','colors','colorsVal','invert','sizeRange','sizeVal','binSize','origSize','previewSize','statusText','outputSize','rotateAngle','rotateAngleVal','cropConfirm','cropCancel','cropCancel2','rotateConfirm','rotateCancel','rotateCancel2'];
+const IDS = ['pageSelect','addPageBtn','removePageBtn','pageUpBtn','pageDownBtn','sizeWarning','saveStatus','fileInput','orig','overlay','preview','lens','cropCanvas','rotateCanvas','cropModal','rotateModal','openBtn','undoBtn','redoBtn','rotateBtn','rotateCustomBtn','flipHBtn','flipVBtn','cropBtn','frontBtn','backBtn','deleteBtn','downloadBtn','downloadPreviewBtn','colors','colorsVal','invert','sizeRange','sizeVal','binSize','origSize','previewSize','statusText','outputSize','rotateAngle','rotateAngleVal','cropConfirm','cropCancel','cropCancel2','rotateConfirm','rotateCancel','rotateCancel2'];
 const rad = (d) => d * Math.PI / 180;
 const PAD = 32;       // free space around the board for handles of images that stick out
 const ROT_GAP = 28;   // distance of the rotate handle below the image (screen px)
@@ -21,18 +21,30 @@ class Editor {
     this.selId = null;
     this.nextId = 1;
     this.undoStack = []; this.redoStack = [];
+    this.pages = [this.newPage()]; this.pageIndex = 0;
+    this.storageWritable = true; this.saveRevision = 0;
+    this.saveChain = Promise.resolve(); this.sizeGeneration = 0;
+    this.exportBoard = document.createElement('canvas'); this.exportBoard.width = BW; this.exportBoard.height = BH;
+    this.exportCanvas = document.createElement('canvas');
+    document.querySelector('.app').inert = true;
     this.drag = null; this.cropSel = null; this.dispScale = 1;
     this.bind();
-    this.restore().then(() => {
+    this.ready = this.restore().then(() => {
       this.updateLabels();
       this.render(); this.updatePreview(); this.syncUi();
       if (this.items.length) this.updateStatus('Session restored');
+      this.refreshPages(); document.querySelector('.app').inert = false;
     });
   }
 
   /* ---------- Events ---------- */
   bind() {
     const on = (el, ev, fn) => el.addEventListener(ev, fn);
+    on(this.pageSelect, 'change', () => this.switchPage(Number(this.pageSelect.value)));
+    on(this.addPageBtn, 'click', () => this.addPage());
+    on(this.removePageBtn, 'click', () => this.removePage());
+    on(this.pageUpBtn, 'click', () => this.movePage(-1));
+    on(this.pageDownBtn, 'click', () => this.movePage(1));
     on(this.openBtn, 'click', () => this.fileInput.click());
     on(this.fileInput, 'change', async (e) => { await this.addFiles([...e.target.files]); e.target.value = ''; });
     on(this.undoBtn, 'click', () => this.undo());
@@ -79,6 +91,7 @@ class Editor {
     window.addEventListener('keydown', (e) => this.onKey(e));
     window.addEventListener('resize', () => this.render());
     window.addEventListener('beforeunload', () => this.save());
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this.save(); });
 
     // magnifier on preview
     on(this.prevWrap, 'mousemove', (e) => this.moveLens(e));
@@ -86,6 +99,7 @@ class Editor {
   }
 
   onKey(e) {
+    if (this.importing || this.exporting) return;
     if (document.querySelector('.modal[aria-hidden="false"]')) {
       if (e.key === 'Escape') { this.closeModal(this.cropModal); this.closeModal(this.rotateModal); }
       return;
@@ -94,7 +108,64 @@ class Editor {
     if (mod && k === 'z') { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
     else if (mod && k === 'y') { e.preventDefault(); this.redo(); }
     else if (mod && k === 's') { e.preventDefault(); this.exportBinary(); }
-    else if ((e.key === 'Delete' || e.key === 'Backspace') && document.activeElement.tagName !== 'INPUT') this.remove();
+    else if ((e.key === 'Delete' || e.key === 'Backspace') && !['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName)) this.remove();
+  }
+
+  /* ---------- Gallery ---------- */
+  newPage() { return {items: [], selId: null, undoStack: [], redoStack: []}; }
+  capturePage() {
+    Object.assign(this.pages[this.pageIndex], {items: this.items, selId: this.selId, undoStack: this.undoStack, redoStack: this.redoStack});
+  }
+  pageControlsAvailable() {
+    return !this.importing && !this.exporting && !document.querySelector('.modal[aria-hidden="false"]');
+  }
+  activatePage(index) {
+    this.pageIndex = index;
+    const p = this.pages[index];
+    this.items = p.items; this.selId = p.selId;
+    this.undoStack = p.undoStack; this.redoStack = p.redoStack;
+    this.drag = null; this.lens.classList.remove('active');
+    this.render(); this.syncUi(); this.refreshPages();
+  }
+  switchPage(index) {
+    if (!this.pageControlsAvailable() || !Number.isInteger(index) || index < 0 || index >= this.pages.length) return;
+    this.capturePage(); this.activatePage(index); this.scheduleSave();
+  }
+  addPage() {
+    if (!this.pageControlsAvailable() || this.pages.length >= GalleryFormat.MAX_PAGES) return;
+    this.capturePage(); this.pages.push(this.newPage()); this.activatePage(this.pages.length - 1); this.scheduleSave();
+  }
+  removePage() {
+    if (!this.pageControlsAvailable()) return;
+    this.capturePage(); this.pages.splice(this.pageIndex, 1);
+    if (!this.pages.length) this.pages.push(this.newPage());
+    this.activatePage(Math.min(this.pageIndex, this.pages.length - 1)); this.scheduleSave();
+  }
+  movePage(direction) {
+    const target = this.pageIndex + direction;
+    if (!this.pageControlsAvailable() || target < 0 || target >= this.pages.length) return;
+    this.capturePage();
+    const [page] = this.pages.splice(this.pageIndex, 1); this.pages.splice(target, 0, page);
+    this.activatePage(target); this.scheduleSave();
+  }
+  refreshPages() {
+    this.pageSelect.replaceChildren(...this.pages.map((p, i) => {
+      const option = document.createElement('option'); option.value = i;
+      option.textContent = `Page ${i + 1} / ${this.pages.length}${p.items.length ? '' : ' (empty)'}`; return option;
+    }));
+    this.pageSelect.value = this.pageIndex;
+    const busy = !this.pageControlsAvailable();
+    this.pageSelect.disabled = busy;
+    this.addPageBtn.disabled = busy || this.pages.length >= GalleryFormat.MAX_PAGES;
+    this.removePageBtn.disabled = busy;
+    this.pageUpBtn.disabled = busy || this.pageIndex === 0;
+    this.pageDownBtn.disabled = busy || this.pageIndex + 1 === this.pages.length;
+  }
+  async addFiles(files) {
+    if (this.importing || this.exporting) return;
+    this.importing = true; document.querySelector('.app').inert = true; this.refreshPages();
+    try { await this._addFiles(files); }
+    finally { this.importing = false; document.querySelector('.app').inert = false; this.capturePage(); this.refreshPages(); }
   }
 
   /* ---------- Model helpers ---------- */
@@ -120,12 +191,12 @@ class Editor {
     return new Promise((res, rej) => {
       const img = new Image();
       img.onload = () => { if (url.startsWith('blob:')) URL.revokeObjectURL(url); res(img); };
-      img.onerror = rej;
+      img.onerror = (e) => { if (url.startsWith('blob:')) URL.revokeObjectURL(url); rej(e); };
       img.src = url;
     });
   }
 
-  async addFiles(files) {
+  async _addFiles(files) {
     files = files.filter((f) => f.type.startsWith('image/'));
     if (!files.length) return;
     this.pushHistory();
@@ -374,7 +445,7 @@ class Editor {
     this.pctx.putImageData(data, 0, 0);
     this.fit();
     this.previewSize.textContent = `${W}×${H}`;
-    this.binSize.textContent = this.formatFileSize(this.computeBinarySize());
+    this.refreshBinarySize();
   }
 
   updateLabels() {
@@ -407,8 +478,8 @@ class Editor {
   }
 
   /* ---------- Crop modal (selected image only) ---------- */
-  openModal(m) { m.setAttribute('aria-hidden', 'false'); }
-  closeModal(m) { m.setAttribute('aria-hidden', 'true'); this.cropStart = null; }
+  openModal(m) { m.setAttribute('aria-hidden', 'false'); this.refreshPages(); }
+  closeModal(m) { m.setAttribute('aria-hidden', 'true'); this.cropStart = null; this.refreshPages(); }
   cropPt(e) {
     const r = this.cropCanvas.getBoundingClientRect(), c = this.cropCanvas;
     return { x: Math.max(0, Math.min(c.width, (e.clientX - r.left) * c.width / r.width)), y: Math.max(0, Math.min(c.height, (e.clientY - r.top) * c.height / r.height)) };
@@ -476,27 +547,37 @@ class Editor {
   }
 
   /* ---------- Binary size + export (unchanged RLE logic) ---------- */
-  computeBinarySize() {
-    if (!this.items.length) return 0;
-    const ncolors = parseInt(this.colors.value || 16, 10), invert = this.invert.checked;
-    const w = this.preview.width, h = this.preview.height;
-    const imgd = this.pctx.getImageData(0, 0, w, h).data;
-    let size = 0;
-    for (let y = 0; y < h; y++) {
-      for (let xChunk = 0; xChunk < w; xChunk += 320) {
-        const xEnd = Math.min(xChunk + 320, w);
-        let cur = Math.round(imgd[(y * w + xChunk) * 4] / 255 * (ncolors - 1));
-        if (invert) cur = (ncolors - 1) - cur;
-        let run = 1;
-        for (let x = xChunk + 1; x < xEnd; x++) {
-          let v = Math.round(imgd[(y * w + x) * 4] / 255 * (ncolors - 1));
-          if (invert) v = (ncolors - 1) - v;
-          if (v === cur && run < 16) run++; else { size++; cur = v; run = 1; }
+  encodePage(page) {
+    const board = this.exportBoard, ctx = board.getContext('2d');
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, BW, BH);
+    page.items.forEach(it => this.drawItem(ctx, it));
+    const mult = Math.max(1, Math.min(12, Number(this.sizeRange.value)));
+    const canvas = this.exportCanvas; canvas.width = mult * 320; canvas.height = mult * 240;
+    const x = canvas.getContext('2d'); x.drawImage(board, 0, 0, canvas.width, canvas.height);
+    return {width: canvas.width, height: canvas.height,
+      bytes: GalleryFormat.encodeRGBA(x.getImageData(0, 0, canvas.width, canvas.height).data,
+        canvas.width, canvas.height, Number(this.colors.value), this.invert.checked)};
+  }
+  async refreshBinarySize() {
+    const generation = ++this.sizeGeneration;
+    this.capturePage();
+    let total = 16 + this.pages.length * 16;
+    const options = `${this.colors.value}:${this.sizeRange.value}:${this.invert.checked}`;
+    try {
+      for (const page of this.pages) {
+        if (generation !== this.sizeGeneration) return;
+        const signature = options + JSON.stringify(page.items);
+        if (page.sizeSignature !== signature) {
+          page.binarySize = page.items.length ? this.encodePage(page).bytes.length : 0;
+          page.sizeSignature = signature;
         }
-        if (run > 0) size++;
+        total += page.binarySize;
+        await new Promise(resolve => setTimeout(resolve, 0));
       }
-    }
-    return size;
+      if (generation !== this.sizeGeneration) return;
+      this.binSize.textContent = this.formatFileSize(total);
+      this.sizeWarning.hidden = !GalleryFormat.needsWarning(total);
+    } catch (e) { this.updateStatus(`Cannot estimate gallery size: ${e.message}`); }
   }
   formatFileSize(bytes) {
     if (!bytes) return '0 o';
@@ -509,35 +590,27 @@ class Editor {
     const url = URL.createObjectURL(blob), a = document.createElement('a');
     a.href = url; a.download = name; a.click(); URL.revokeObjectURL(url);
   }
-  exportBinary() {
-    if (!this.items.length) { alert('Add an image first'); return; }
-    this.updatePreview();
-    const ncolors = parseInt(this.colors.value || 16, 10), invert = this.invert.checked;
-    const w = this.preview.width, h = this.preview.height;
-    const imgd = this.pctx.getImageData(0, 0, w, h).data;
-    const indices = [];
-    for (let y = 0; y < h; y++) {
-      for (let x = 0; x < w; x++) {
-        const intensity = imgd[(y * w + x) * 4];
-        let idx = Math.round(intensity / 255 * (ncolors - 1));
-        if (invert) idx = (ncolors - 1) - idx;
-        indices.push(Math.round(idx / (ncolors - 1) * 15) & 0x0F);
+  async exportBinary() {
+    if (this.exporting || this.importing) return;
+    this.capturePage();
+    const empty = this.pages.findIndex(p => !p.items.length);
+    if (empty >= 0) { this.updateStatus(`Page ${empty + 1} is empty. Add an image or remove this page before exporting.`); return; }
+    this.exporting = true; document.querySelector('.app').inert = true; this.refreshPages();
+    ++this.sizeGeneration; clearTimeout(this.pt);
+    try {
+      const encoded = [];
+      for (let i = 0; i < this.pages.length; ++i) {
+        this.updateStatus(`Exporting page ${i + 1} / ${this.pages.length}…`);
+        await new Promise(resolve => setTimeout(resolve, 0));
+        encoded.push(this.encodePage(this.pages[i]));
       }
-    }
-    const out = [];
-    for (let y = 0; y < h; y++) {
-      for (let xChunk = 0; xChunk < w; xChunk += 320) {
-        const xEnd = Math.min(xChunk + 320, w);
-        let cur = indices[y * w + xChunk], run = 1;
-        for (let x = xChunk + 1; x < xEnd; x++) {
-          const v = indices[y * w + x];
-          if (v === cur && run < 16) run++; else { out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F)); cur = v; run = 1; }
-        }
-        if (run > 0) out.push(((run - 1) & 0x0F) << 4 | (cur & 0x0F));
-      }
-    }
-    this.download(new Blob([new Uint8Array(out)], { type: 'application/octet-stream' }), 'input.bin');
-    this.updateStatus('Binary file exported');
+      const bytes = GalleryFormat.pack(encoded);
+      this.binSize.textContent = this.formatFileSize(bytes.length);
+      this.sizeWarning.hidden = !GalleryFormat.needsWarning(bytes.length);
+      this.download(new Blob([bytes], {type: 'application/octet-stream'}), 'gallery.bin');
+      this.updateStatus(`Gallery exported: ${this.pages.length} pages, ${this.formatFileSize(bytes.length)}.`);
+    } catch (e) { this.updateStatus(`Export failed: ${e.message}`); }
+    finally { this.exporting = false; document.querySelector('.app').inert = false; this.refreshPages(); }
   }
   exportPreviewPng() {
     if (!this.items.length) { alert('Add an image first'); return; }
@@ -546,28 +619,88 @@ class Editor {
   }
 
   /* ---------- Session ---------- */
-  scheduleSave() { clearTimeout(this.st); this.st = setTimeout(() => this.save(), 500); }
+  scheduleSave() { ++this.saveRevision; this.storageWritable = true; clearTimeout(this.st); this.saveStatus.textContent = 'Changes not saved yet'; this.st = setTimeout(() => this.save(), 500); }
   save() {
-    try {
-      const sources = {};
-      this.items.forEach((it) => { sources[it.src] = this.sources.get(it.src).toDataURL('image/jpeg', 0.85); });
-      localStorage.setItem(KEY, JSON.stringify({ sources, items: this.items, nextId: this.nextId, colors: this.colors.value, size: this.sizeRange.value, invert: this.invert.checked }));
-    } catch (e) { /* storage full: skip */ }
+    if (!this.storageWritable) return Promise.resolve();
+    clearTimeout(this.st); this.capturePage();
+    const pages = this.pages.map(p => ({items: structuredClone(p.items), selId: p.selId,
+      undoStack: [...p.undoStack], redoStack: [...p.redoStack]}));
+    const ids = new Set();
+    pages.forEach(p => {
+      p.items.forEach(it => ids.add(it.src));
+      [...p.undoStack, ...p.redoStack].forEach(s => JSON.parse(s).items.forEach(it => ids.add(it.src)));
+    });
+    const sources = [...ids].map(id => [id, this.sources.get(id)]);
+    const state = {version: 3, pages, pageIndex: this.pageIndex, nextId: this.nextId,
+      colors: this.colors.value, size: this.sizeRange.value, invert: this.invert.checked};
+    const revision = ++this.saveRevision;
+    this.saveStatus.textContent = 'Saving…';
+    const task = async () => {
+      const blobs = {};
+      for (const [id, canvas] of sources) {
+        if (!canvas) throw new Error('Missing image source');
+        blobs[id] = await new Promise((resolve, reject) => canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error('Image saving failed')), 'image/png'));
+      }
+      await GalleryStorage.save({...state, sources: blobs});
+    };
+    const result = this.saveChain.catch(() => {}).then(task);
+    this.saveChain = result;
+    result.then(() => { if (revision === this.saveRevision) this.saveStatus.textContent = 'Saved locally'; }, e => {
+      if (revision !== this.saveRevision) return;
+      this.saveStatus.textContent = `Saving failed: ${e.message}. Export your gallery to keep a copy.`;
+    });
+    return result;
   }
   async restore() {
     try {
-      const d = JSON.parse(localStorage.getItem(KEY) || 'null'); if (!d) return;
-      for (const [id, url] of Object.entries(d.sources || {})) {
-        const img = await this.loadImage(url), c = document.createElement('canvas');
-        c.width = img.naturalWidth; c.height = img.naturalHeight; c.getContext('2d').drawImage(img, 0, 0);
-        this.sources.set(id, c);
+      let state = await GalleryStorage.load(), legacy = false;
+      if (!state) {
+        const old = JSON.parse(localStorage.getItem(KEY) || 'null');
+        if (!old) return;
+        state = {...old, version: 3, pages: [{items: old.items || [], selId: null, undoStack: [], redoStack: []}], pageIndex: 0}; legacy = true;
       }
-      this.items = (d.items || []).filter((i) => this.sources.has(i.src));
-      this.nextId = d.nextId || 1;
-      if (d.colors) this.colors.value = d.colors;
-      if (d.size) this.sizeRange.value = d.size;
-      this.invert.checked = !!d.invert;
-    } catch (e) { /* ignore corrupt session */ }
+      if (state.version !== 3 || !Array.isArray(state.pages) || !state.pages.length || state.pages.length > GalleryFormat.MAX_PAGES) throw new Error('Invalid saved gallery');
+      const sources = new Map();
+      for (const [id, value] of Object.entries(state.sources || {})) {
+        if (!(value instanceof Blob) && typeof value !== 'string') throw new Error('Invalid saved image');
+        const img = await this.loadImage(value instanceof Blob ? URL.createObjectURL(value) : value);
+        if (!img.naturalWidth || !img.naturalHeight || img.naturalWidth > MAXSRC || img.naturalHeight > MAXSRC) throw new Error('Saved image exceeds source limits');
+        const c = document.createElement('canvas'); c.width = img.naturalWidth; c.height = img.naturalHeight;
+        c.getContext('2d').drawImage(img, 0, 0); sources.set(id, c);
+      }
+      const validateItems = items => {
+        if (!Array.isArray(items)) throw new Error('Invalid saved page');
+        const ids = new Set();
+        for (const it of items) {
+          const source = sources.get(it.src), crop = it.crop;
+          if (typeof it.id !== 'string' || ids.has(it.id) || !source ||
+              !['x','y','w','h','angle','fx','fy'].every(k => Number.isFinite(it[k])) ||
+              it.w <= 0 || it.h <= 0 || ![-1,1].includes(it.fx) || ![-1,1].includes(it.fy) ||
+              !crop || !['x','y','w','h'].every(k => Number.isFinite(crop[k])) ||
+              crop.x < 0 || crop.y < 0 || crop.w <= 0 || crop.h <= 0 ||
+              crop.x + crop.w > source.width + 1e-6 || crop.y + crop.h > source.height + 1e-6) throw new Error('Invalid saved image geometry');
+          ids.add(it.id);
+        }
+      };
+      state.pages.forEach(p => {
+        validateItems(p.items);
+        p.undoStack = p.undoStack || []; p.redoStack = p.redoStack || [];
+        for (const history of [p.undoStack, p.redoStack]) {
+          if (!Array.isArray(history) || history.length > 60) throw new Error('Invalid saved history');
+          history.forEach(snapshot => validateItems(JSON.parse(snapshot).items));
+        }
+      });
+      this.sources = sources; this.pages = state.pages;
+      this.nextId = Number.isSafeInteger(state.nextId) && state.nextId > 0 ? state.nextId : 1;
+      sources.forEach((_, id) => { this.nextId = Math.max(this.nextId, (Number(id.slice(1)) || 0) + 1); });
+      if (Number(state.colors) >= 2 && Number(state.colors) <= 16) this.colors.value = state.colors;
+      if (Number(state.size) >= 1 && Number(state.size) <= 12) this.sizeRange.value = state.size;
+      this.invert.checked = !!state.invert;
+      const index = Number.isInteger(state.pageIndex) && state.pageIndex >= 0 && state.pageIndex < this.pages.length ? state.pageIndex : 0;
+      this.activatePage(index);
+      if (legacy) { await this.save(); localStorage.removeItem(KEY); }
+      this.saveStatus.textContent = 'Saved gallery restored';
+    } catch (e) { this.storageWritable = false; this.saveStatus.textContent = `Restore failed: ${e.message}. Previous saved data has been kept.`; }
   }
 }
 

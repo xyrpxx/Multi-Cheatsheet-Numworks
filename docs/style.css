@@ -32,7 +32,7 @@ output, dd { font-variant-numeric: tabular-nums; }
 
 .app {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   height: 100vh;
 }
 
@@ -275,3 +275,12 @@ input[type="range"] {
   .group + .group { border-left: 0; padding-left: 0; }
   .stats { margin-left: 0; }
 }
+/* Gallery navigation keeps the original editing tools and canvas layout. */
+.page-bar { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--line); }
+.page-bar select { color:var(--text); background:var(--surface); border:1px solid var(--line); border-radius:var(--radius); padding:6px; }
+#saveStatus { margin-left:auto; max-width:400px; color:var(--muted); font-size:12px; }
+.size-warning { color:#ffc16a; flex-basis:100%; margin:4px 0; }
+@media(max-width:700px) { #saveStatus { flex-basis:100%; margin-left:0; } .page-bar { gap:5px; } }
+
+.download-link { color:var(--accent); text-decoration:none; }
+.download-link:hover { text-decoration:underline; }

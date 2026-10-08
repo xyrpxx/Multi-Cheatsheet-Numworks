@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Cheatsheet image converter</title>
+  <title>Multi-Cheatsheet — Gallery editor</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -38,6 +38,16 @@
       </div>
     </header>
 
+    <nav class="page-bar" aria-label="Gallery pages">
+      <label for="pageSelect">Gallery</label>
+      <a class="download-link" href="downloads/Multi-Cheatsheet.nwa" download>Download app (.nwa)</a>
+      <select id="pageSelect" aria-label="Current page"></select>
+      <button class="btn" id="addPageBtn">Add page</button>
+      <button class="btn" id="removePageBtn">Remove page</button>
+      <button class="btn" id="pageUpBtn" title="Move page earlier">Move earlier</button>
+      <button class="btn" id="pageDownBtn" title="Move page later">Move later</button>
+      <span id="saveStatus" role="status" aria-live="polite">Loading saved gallery…</span>
+    </nav>
     <!-- Canvases -->
     <main class="panes">
       <section class="pane">
@@ -81,6 +91,7 @@
         <div><dt>Output</dt><dd id="outputSize">1280×960</dd></div>
         <div><dt>.bin size</dt><dd id="binSize">0 B</dd></div>
       </dl>
+      <p id="sizeWarning" class="size-warning" role="status" hidden>Gallery exceeds 2.2 Mo. It may not fit on your calculator. Export is still available.</p>
       <p class="status" id="statusText" role="status">Ready. Add images to start; click one to select it, then use the tools.</p>
     </footer>
 
@@ -126,6 +137,8 @@
     </div>
   </div>
 
+  <script src="gallery-format.js"></script>
+  <script src="gallery-storage.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -4,10 +4,13 @@ CXX = arm-none-eabi-g++
 BUILD_DIR = output
 BUILD_DIR_BUILD = output/build
 BUILD_DIR_TEST = output/sim
+SIM_LIB ?= sim/libepsilon.a
+SIM_SPLIT_API ?= 0
+SIMULATOR_EXE ?= ./sim/epsilon.exe
 CC_TEST = x86_64-w64-mingw32-gcc
 CXX_TEST = x86_64-w64-mingw32-g++
-CFLAGS_TEST = -std=c99
-CFLAGS_TEST += -Os -Wall
+CFLAGS_TEST = -std=c99 -MMD -MP
+CFLAGS_TEST += -Os -Wall -DSIMULATOR=1 -DSIMULATOR_SPLIT_API=$(SIM_SPLIT_API)
 CFLAGS_TEST += -ggdb
 LDFLAGS_TEST = -shared
 
@@ -27,10 +30,13 @@ src = $(addprefix src/,\
   settings.c \
   libs/storage.c \
   periodic.c \
+  gallery.c \
   main.c \
 )
 
-CFLAGS = -std=c99
+src_test = $(filter-out src/libs/storage.c,$(src))
+
+CFLAGS = -std=c99 -MMD -MP
 CFLAGS += $(shell $(NWLINK) eadk-cflags-device)
 CFLAGS += -Os -Wall
 CFLAGS += -ggdb
@@ -66,7 +72,7 @@ run: $(BUILD_DIR_BUILD)/app.nwa sim/input.bin
 .PHONY: test
 test: $(BUILD_DIR_TEST)/app.dll sim/input.bin
 	@echo "TEST $@"
-	$(Q) ./sim/epsilon.exe --nwb $(BUILD_DIR_TEST)/app.dll --nwb-external-data sim/input.bin
+	$(Q) $(SIMULATOR_EXE) --nwb $(BUILD_DIR_TEST)/app.dll --nwb-external-data sim/input.bin
 
 $(BUILD_DIR_BUILD)/%.bin: $(BUILD_DIR_BUILD)/%.nwa sim/input.bin
 	@echo "BIN     $@"
@@ -81,29 +87,29 @@ $(BUILD_DIR_BUILD)/app.nwa: $(call object_for_dir,$(BUILD_DIR_BUILD),$(src)) $(B
 	$(Q) $(CC) $(CFLAGS) $(LDFLAGS) $^ -lm -o $@
 
 # Windows-test build: produce a DLL with mingw
-$(BUILD_DIR_TEST)/app.dll: $(call object_for_dir,$(BUILD_DIR_TEST),$(src)) sim/libepsilon.a
+$(BUILD_DIR_TEST)/app.dll: $(call object_for_dir,$(BUILD_DIR_TEST),$(src_test)) $(BUILD_DIR_TEST)/sim/eadk-compat.o $(SIM_LIB)
 	@echo "LDTEST  $@"
-	$(Q) $(CC_TEST) $(CFLAGS_TEST) $(LDFLAGS_TEST) $^ sim/libepsilon.a -lm -o $@
+	$(Q) $(CC_TEST) $(CFLAGS_TEST) $(LDFLAGS_TEST) $^ $(SIM_LIB) -lm -o $@
 
 $(addprefix $(BUILD_DIR_BUILD)/,%.o): %.c | $(BUILD_DIR_BUILD)
-	@echo "CC      $^"
+	@echo "CC      $<"
 	$(Q) mkdir -p $(dir $@)
-	$(Q) $(CC) $(CFLAGS) -c $^ -o $@
+	$(Q) $(CC) $(CFLAGS) -c $< -o $@
 
 $(addprefix $(BUILD_DIR_BUILD)/,%.o): %.cpp | $(BUILD_DIR_BUILD)
-	@echo "CXX     $^"
+	@echo "CXX     $<"
 	$(Q) mkdir -p $(dir $@)
-	$(Q) $(CXX) $(CFLAGS) -c $^ -o $@
+	$(Q) $(CXX) $(CFLAGS) -c $< -o $@
 
 $(addprefix $(BUILD_DIR_TEST)/,%.o): %.c | $(BUILD_DIR_TEST)
-	@echo "CCTEST  $^"
+	@echo "CCTEST  $<"
 	$(Q) mkdir -p $(dir $@)
-	$(Q) $(CC_TEST) $(CFLAGS_TEST) -c $^ -o $@
+	$(Q) $(CC_TEST) $(CFLAGS_TEST) -c $< -o $@
 
 $(addprefix $(BUILD_DIR_TEST)/,%.o): %.cpp | $(BUILD_DIR_TEST)
-	@echo "CXXTEST $^"
+	@echo "CXXTEST $<"
 	$(Q) mkdir -p $(dir $@)
-	$(Q) $(CXX_TEST) $(CFLAGS_TEST) -c $^ -o $@
+	$(Q) $(CXX_TEST) $(CFLAGS_TEST) -c $< -o $@
 
 $(BUILD_DIR_BUILD)/icon.o: assets/icon.png
 	@echo "ICON    $<"
@@ -120,3 +126,5 @@ $(BUILD_DIR_TEST):
 clean:
 	@echo "CLEAN"
 	$(Q) rm -rf $(BUILD_DIR_BUILD) $(BUILD_DIR_TEST)
+
+-include $(addprefix $(BUILD_DIR_BUILD)/,$(src:.c=.d)) $(addprefix $(BUILD_DIR_TEST)/,$(src:.c=.d)) $(BUILD_DIR_TEST)/sim/eadk-compat.d
